@@ -5,7 +5,7 @@ using System.IO;
 
 namespace SHA256_libraries
 {
-    public class SHA256
+    public class Sha256
     {
         private static readonly UInt32[] KUints = {
             0x428A2F98, 0x71374491, 0xB5C0FBCF, 0xE9B5DBA5, 0x3956C25B, 0x59F111F1, 0x923F82A4, 0xAB1C5ED5,
@@ -50,14 +50,24 @@ namespace SHA256_libraries
             return Rotr(x, 17) ^ Rotr(x, 19) ^ (x >> 10);
         }
 
-        private UInt32[] H = new UInt32[8]
+        private static UInt32 sigma0(UInt32 x)
+        {
+            return Rotr(x, 7) ^ Rotr(x, 18) ^ (x >> 3);
+        }
+
+        private static UInt32 sigma1(UInt32 x)
+        {
+            return Rotr(x, 17) ^ Rotr(x, 19) ^ (x >> 10);
+        }
+
+        private UInt32[] _h = new UInt32[8]
         {
             0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19
         };
 
-        private byte[] _pendingBlock = new byte[64];
+        private readonly byte[] _pendingBlock = new byte[64];
         private uint _pendingBlockOff = 0;
-        private UInt32[] _uintBuffer = new UInt32[16];
+        private readonly UInt32[] _uintBuffer = new UInt32[16];
 
         private UInt64 _bitsProcessed = 0;
 
@@ -68,12 +78,176 @@ namespace SHA256_libraries
             Debug.Assert(mUints.Length == 16);
 
             // BASIS: Prepare message for function W[t]:
-            UInt32[] w = new UInt32[64];
-            for (int t = 0; t < 16; ++t)
+            var w = new UInt32[64];
+            for (var t = 0; t < 16; ++t)
             {
-                // ?? looper
-                // timecop
+                w[t] = mUints[t];
+                
             }
+
+            for (var t = 16; t < 64; ++t)
+            {
+                w[t] = sigma1(w[t - 2]) + w[t - 7] + sigma0(w[t - 15]) + w[t - 16];
+            }
+
+            // INITIALIZE: Prepare eight working variables with hash values of (i - 1):
+            UInt32 a = _h[0],
+                b = _h[1],
+                c = _h[2],
+                d = _h[3],
+                e = _h[4],
+                f = _h[5],
+                g = _h[6],
+                h = _h[7];
+
+            // LOOP: For t = 0 to 63:
+            for (int t = 0; t < 64; ++t)
+            {
+                UInt32 t1 = h + Sigma1(e) + Ch(e, f, g) + KUints[t] + w[t];
+                UInt32 t2 = Sigma0(a) + Major(a, b, c);
+                h = g;
+                g = f;
+                f = e;
+                e = d + t1;
+                d = c;
+                c = b;
+                b = a;
+                a = t1 + t2;
+            }
+
+            // SOLVE: Solve for hash value h:
+            _h[0] = a + _h[0];
+            _h[1] = b + _h[1];
+            _h[2] = c + _h[2];
+            _h[3] = d + _h[3];
+            _h[4] = e + _h[4];
+            _h[5] = f + _h[5];
+            _h[6] = g + _h[6];
+            _h[7] = h + _h[7];
+
+        }
+
+        private void AddData(byte[] data, uint offset, uint len)
+        {
+            if (_closed)
+                throw new InvalidOperationException("Adding data to a 'closed' hasher.");
+
+            if (len == 0)
+                return;
+
+            _bitsProcessed += len*8;
+
+            while (len > 0)
+            {
+                uint amountToCopy;
+
+                if (len < 64)
+                {
+                    if (_pendingBlockOff + len > 64)
+                        amountToCopy = 64 - _pendingBlockOff;
+                    else
+                    {
+                        amountToCopy = len;
+                    }
+                }
+                else
+                {
+                    amountToCopy = 64 - _pendingBlockOff;
+                }
+
+                Array.Copy(data, offset, _pendingBlock, _pendingBlockOff, amountToCopy);
+                len -= amountToCopy;
+                offset += amountToCopy;
+                _pendingBlockOff += amountToCopy;
+
+                if (_pendingBlockOff == 64)
+                {
+                    ToUintArray(_pendingBlock, _uintBuffer);
+                    ProcessBlock(_uintBuffer);
+                    _pendingBlockOff = 0;
+                }
+            }
+        }
+
+        private ReadOnlyCollection<byte> GetHash()
+        {
+            return toByteArray(GetHashUInt32());
+        }
+
+        private ReadOnlyCollection<UInt32> GetHashUInt32()
+        {
+            if (!_closed)
+            {
+                UInt64 sizeTemp = _bitsProcessed;
+
+                AddData(new byte[1] {0x80}, 0, 1);
+
+                var availableSpace = 64 - _pendingBlockOff;
+
+                if (availableSpace < 8)
+                    availableSpace
+                        += 64;
+
+                // init
+                var paddingBytes = new byte[availableSpace];
+                // update uint64 length
+                for (uint i = 1; i <= 8; ++i)
+                {
+                    paddingBytes[paddingBytes.Length - i] = (byte) sizeTemp;
+                    sizeTemp >>= 8;
+                }
+
+                AddData(paddingBytes, 0u, (uint) paddingBytes.Length);
+
+                Debug.Assert(_pendingBlockOff == 0);
+                _closed = true;
+            }
+
+            return Array.AsReadOnly(_h);
+        }
+
+        private static void ToUintArray(byte[] src, UInt32[] destUints)
+        {
+            for (uint i = 0, j = 0; i < destUints.Length; ++i, j += 4)
+            {
+                destUints[i] = ((UInt32)src[j + 0] << 24) | ((UInt32)src[j + 1] << 16) | ((UInt32)src[j + 2] << 8) | ((UInt32)src[j + 3]);
+            }
+        }
+
+        private static ReadOnlyCollection<byte> toByteArray(ReadOnlyCollection<UInt32> src)
+        {
+            var destBytes = new byte[src.Count*4];
+            var position = 0;
+
+            for (var i = 0; i < src.Count; ++i)
+            {
+                destBytes[position++] = (byte) (i >> 24);
+                destBytes[position++] = (byte)(i >> 16);
+                destBytes[position++] = (byte)(i >> 8);
+                destBytes[position++] = (byte)(i);
+
+            }
+
+            return Array.AsReadOnly(destBytes);
+        }
+
+        public static ReadOnlyCollection<byte> HashFile(Stream fs)
+        {
+            var sha = new Sha256();
+            var buf = new byte[8196];
+
+            uint bytesRead;
+            do
+            {
+                bytesRead = (uint)fs.Read(buf, 0, buf.Length);
+                if (bytesRead == 0)
+                    break;
+
+                sha.AddData(buf, 0, bytesRead);
+            }
+            while (bytesRead == 8196);
+
+            return sha.GetHash();
         }
     }
 }

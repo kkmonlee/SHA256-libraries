@@ -1,11 +1,17 @@
 ﻿using System.Collections.ObjectModel;
 using System.IO;
-using SHA2;
+using SHA256_libraries;
 
 
 namespace SHA256_Check
 {
-    public class Program
+    class Program
     {
+        static void Main(string[] args)
+        {
+            ReadOnlyCollection<byte> hashBytes = Sha256.HashFile(File.OpenRead(@"foo.bin"));
+
+            System.Console.Out.WriteLine("{0}", Util.ArrayToString(hashBytes));
+        }
     }
 }
